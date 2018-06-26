@@ -1,685 +1,789 @@
-'''
-MIT License
-
-Copyright (c) 2017 Grok
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-'''
-
-from __future__ import division
-import discord
-import math
-import operator
-import colorthief
-import asyncio
+import datetime
+import time
 import random
-import emoji
-import copy
-import io
-import aiohttp
-import json
-import os
 import requests
-import urllib.parse
-import urbanasync
+import json
+import discord
+import git
+import os
+import io
 from discord.ext import commands
-from ext.utility import parse_equation
-from ext.colours import ColorNames
-from urllib.request import urlopen
-from bs4 import BeautifulSoup
-from sympy import solve
-from PIL import Image
-from datetime import datetime
-from discord.ext import commands
-from pyparsing import (Literal,CaselessLiteral,Word,Combine,Group,Optional,
-                    ZeroOrMore,Forward,nums,alphas,oneOf)
-from discord.ext import commands
-from ext.utility import parse_equation
-from ext.colours import ColorNames
-from urllib.request import urlopen
-from sympy import solve
-from PIL import Image
-import safygiphy
-from ext import embedtobox
+from cogs.utils.config import get_config_value
+from cogs.utils.dataIO import dataIO
+from cogs.utils.checks import embed_perms, cmd_prefix_len, parse_prefix, get_user, hastebin
 
+'''Module for miscellaneous commands'''
 
-class NumericStringParserForPython3(object):
-    '''
-    Most of this code comes from the fourFn.py pyparsing example
-
-    '''
-    def pushFirst(self, strg, loc, toks ):
-        self.exprStack.append( toks[0] )
-    def pushUMinus(self, strg, loc, toks ):
-        if toks and toks[0]=='-':
-            self.exprStack.append( 'unary -' )
-    def __init__(self):
-        """
-        Please use any of the following symbols:
-        expop   :: '^'
-        multop  :: '*' | '/'
-        addop   :: '+' | '-'
-        integer :: ['+' | '-'] '0'..'9'+
-        """
-        point = Literal( "." )
-        e     = CaselessLiteral( "E" )
-        fnumber = Combine( Word( "+-"+nums, nums ) +
-                        Optional( point + Optional( Word( nums ) ) ) +
-                        Optional( e + Word( "+-"+nums, nums ) ) )
-        ident = Word(alphas, alphas+nums+"_$")
-        plus  = Literal( "+" )
-        minus = Literal( "-" )
-        mult  = Literal( "*" )
-        div   = Literal( "/" )
-        lpar  = Literal( "(" ).suppress()
-        rpar  = Literal( ")" ).suppress()
-        addop  = plus | minus
-        multop = mult | div
-        expop = Literal( "^" )
-        pi    = CaselessLiteral( "PI" )
-        expr = Forward()
-        atom = ((Optional(oneOf("- +")) +
-                (pi|e|fnumber|ident+lpar+expr+rpar).setParseAction(self.pushFirst))
-                | Optional(oneOf("- +")) + Group(lpar+expr+rpar)
-                ).setParseAction(self.pushUMinus)
-        # by defining exponentiation as "atom [ ^ factor ]..." instead of
-        # "atom [ ^ atom ]...", we get right-to-left exponents, instead of left-to-right
-        # that is, 2^3^2 = 2^(3^2), not (2^3)^2.
-        factor = Forward()
-        factor << atom + ZeroOrMore( ( expop + factor ).setParseAction( self.pushFirst ) )
-        term = factor + ZeroOrMore( ( multop + factor ).setParseAction( self.pushFirst ) )
-        expr << term + ZeroOrMore( ( addop + term ).setParseAction( self.pushFirst ) )
-        # addop_term = ( addop + term ).setParseAction( self.pushFirst )
-        # general_term = term + ZeroOrMore( addop_term ) | OneOrMore( addop_term)
-        # expr <<  general_term
-        self.bnf = expr
-        # this will map operator symbols to their corresponding arithmetic operations
-        epsilon = 1e-12
-        self.opn = {
-                "+" : operator.add,
-                "-" : operator.sub,
-                "*" : operator.mul,
-                "/" : operator.truediv,
-                "^" : operator.pow }
-        self.fn  = {
-                "sin" : math.sin,
-                "cos" : math.cos,
-                "tan" : math.tan,
-                "abs" : abs,
-                "trunc" : lambda a: int(a),
-                "round" : round,
-                "sgn" : lambda a: abs(a)>epsilon and cmp(a,0) or 0}
-    def evaluateStack(self, s ):
-        op = s.pop()
-        if op == 'unary -':
-            return -self.evaluateStack( s )
-        if op in "+-*/^":
-            op2 = self.evaluateStack( s )
-            op1 = self.evaluateStack( s )
-            return self.opn[op]( op1, op2 )
-        elif op == "PI":
-            return math.pi # 3.1415926535
-        elif op == "E":
-            return math.e  # 2.718281828
-        elif op in self.fn:
-            return self.fn[op]( self.evaluateStack( s ) )
-        elif op[0].isalpha():
-            return 0
-        else:
-            return float( op )
-    def eval(self,num_string,parseAll=True):
-        self.exprStack=[]
-        results=self.bnf.parseString(num_string,parseAll)
-        val=self.evaluateStack( self.exprStack[:] )
-        return val
 
 class Misc:
     def __init__(self, bot):
         self.bot = bot
-        self.emoji_converter = commands.EmojiConverter()
-        self.nsp=NumericStringParserForPython3()
-        
-    @commands.command()
-    async def gif(self, ctx, *, tag):
-        ''' Get a random gif. Usage: gif <tag> 
-        this command is sfw, to use nsfw gifs
-        load community.nsfw '''
-        g = safygiphy.Giphy()
-        tag = tag.lower()
-        with open('data/nsfw.json')as f:
-            nsfwgif = json.load(f)
-        if tag in nsfwgif:
-            return await ctx.send('`Please use the nsfw commands to see content like this.`', delete_after=5)
-        gif = g.random(tag=tag)
-        color = await ctx.get_dominant_color(ctx.author.avatar_url)
-        em = discord.Embed(color=color)
-        em.set_image(url=str(gif.get('data', {}).get('image_original_url')))
-        try:
-            await ctx.send(embed=em)
-        except discord.HTTPException:
-            em_list = await embedtobox.etb(em)
-            for page in em_list:
-                await ctx.send(page)
 
-    @commands.command()
-    async def embedsay(self, ctx, *, message):
-        '''Quick command to embed messages quickly.'''
-        await ctx.message.delete()
-        em = discord.Embed(color=random.randint(0, 0xFFFFFF))
-        em.description = message
-        await ctx.send(embed=em)
-
-    def prepare_code(self, code):
-        def map_left_bracket(b, p):
-            return (b, find_bracket(code, p + 1, b))
-
-        def map_right_bracket(b, p):
-            offset = find_bracket(list(reversed(code[:p])), 0, ']')
-            return (b, p - offset)
-
-        def map_bracket(b, p):
-            if b == '[':
-                return map_left_bracket(b, p)
-            else:
-                return map_right_bracket(b, p)
-
-        return [map_bracket(c, i) if c in ('[', ']') else c
-                for c, i in zip(code, range(len(code)))]
-
-    def read(self, string):
-        valid = ['>', '<', '+', '-', '.', ',', '[', ']']
-        return self.prepare_code([c for c in string if c in valid])
-
-    def eval_step(self, code, data, code_pos, data_pos):
-        c = code[code_pos]
-        d = data[data_pos]
-        step = 1
-        output = None
-
-        if c == '>':
-            data_pos = data_pos + 1
-            if data_pos > len(data):
-                data_pos = 0
-        elif c == '<':
-            if data_pos != 0:
-                data_pos -= 1
-        elif c == '+':
-            if d == 255:
-                data[data_pos] = 0
-            else:
-                data[data_pos] += 1
-        elif c == '-':
-            if d == 0:
-                data[data_pos] = 255
-            else:
-                data[data_pos] -= 1
-        elif c == '.':
-            output = (chr(d))
-        elif c == ',':
-            data[data_pos] = ord(stdin.read(1))
+    @commands.command(pass_context=True)
+    async def about(self, ctx, txt: str = None):
+        """Links to the bot's github page."""
+        if embed_perms(ctx.message) and txt != 'short':
+            em = discord.Embed(color=0xad2929, title='\ud83e\udd16 Appu\'s Discord Selfbot',
+                               description='**Features:**\n- Custom commands/reactions\n- Save last x images in a channel to your computer\n- Keyword notifier\n'
+                                           '- Set/cycle your game status and your avatar\n- Google web and image search\n- MyAnimeList search\n- Spoiler tagging\n'
+                                           '- Server info commands\n- Quoting, calculator, creating polls, and much more')
+            em.add_field(name='\ud83d\udd17 Link to download',
+                         value='[Github link](https://github.com/appu1232/Discord-Selfbot/tree/master)')
+            em.add_field(name='\ud83c\udfa5Quick examples:', value='[Simple commands](http://i.imgur.com/3H9zpop.gif)')
+            if txt == 'link': em.add_field(name='👋 Discord Server', value='Join the official Discord server [here](https://discord.gg/FGnM5DM)!')
+            em.set_footer(text='Made by appu1232#2569', icon_url='https://i.imgur.com/RHagTDg.png')
+            await ctx.send(content=None, embed=em)
         else:
-            bracket, jmp = c
-            if bracket == '[' and d == 0:
-                step = 0
-                code_pos = jmp
-            elif bracket == ']' and d != 0:
-                step = 0
-                code_pos = jmp
+            await ctx.send('https://github.com/appu1232/Selfbot-for-Discord')
+        await ctx.message.delete()
 
-        return (data, code_pos, data_pos, step, output)
+    @commands.group(aliases=['status'], pass_context=True)
+    async def stats(self, ctx):
+        """Bot stats."""
+        uptime = (datetime.datetime.now() - self.bot.uptime)
+        hours, rem = divmod(int(uptime.total_seconds()), 3600)
+        minutes, seconds = divmod(rem, 60)
+        days, hours = divmod(hours, 24)
+        if days:
+            time = '%s days, %s hours, %s minutes, and %s seconds' % (days, hours, minutes, seconds)
+        else:
+            time = '%s hours, %s minutes, and %s seconds' % (hours, minutes, seconds)
+        game = self.bot.game
+        if not game:
+            game = 'None'
+        channel_count = 0
+        for guild in self.bot.guilds:
+            channel_count += len(guild.channels)
+        if not self.bot.command_count:
+            most_used_cmd = 'Not enough info'
+        else:
+            cmd_name = max(self.bot.command_count, key=self.bot.command_count.get)
+            total_usage = self.bot.command_count[str(cmd_name)]
+            plural = '' if total_usage == 1 else 's'
+            most_used_cmd = '{} - {} use{}'.format(cmd_name, total_usage, plural)
+        if embed_perms(ctx.message):
+            em = discord.Embed(title='Bot Stats', color=0x32441c)
+            em.add_field(name=u'\U0001F553 Uptime', value=time, inline=False)
+            em.add_field(name=u'\u2328 Most Used Cmd', value=most_used_cmd, inline=False)
+            em.add_field(name=u'\U0001F4E4 Msgs sent', value=str(self.bot.icount))
+            em.add_field(name=u'\U0001F4E5 Msgs received', value=str(self.bot.message_count))
+            em.add_field(name=u'\u2757 Mentions', value=str(self.bot.mention_count))
+            em.add_field(name=u'\u2694 Servers', value=str(len(self.bot.guilds)))
+            em.add_field(name=u'\ud83d\udcd1 Channels', value=str(channel_count))
+            em.add_field(name=u'\u270F Keywords logged', value=str(self.bot.keyword_log))
+            g = u'\U0001F3AE Game'
+            if '=' in game: g = '\ud83c\udfa5 Stream'
+            em.add_field(name=g, value=game)
+            try:
+                mem_usage = '{:.2f} MiB'.format(__import__('psutil').Process().memory_full_info().uss / 1024 ** 2)
+            except AttributeError:
+                # OS doesn't support retrieval of USS (probably BSD or Solaris)
+                mem_usage = '{:.2f} MiB'.format(__import__('psutil').Process().memory_full_info().rss / 1024 ** 2)
+            em.add_field(name=u'\U0001F4BE Memory usage:', value=mem_usage)
+            try:
+                g = git.cmd.Git(working_dir=os.getcwd())
+                branch = g.execute(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+                g.execute(["git", "fetch", "origin", branch])
+                version = g.execute(["git", "rev-list", "--right-only", "--count", "{}...origin/{}".format(branch, branch)])
+                if branch == "master":
+                    branch_note = "."
+                else:
+                    branch_note = " (`" + branch + "` branch)."
+                if version == '0':
+                    status = 'Up to date%s' % branch_note
+                else:
+                    latest = g.execute(
+                        ["git", "log", "--pretty=oneline", "--abbrev-commit", "--stat", "--pretty", "-%s" % version,
+                         "origin/%s" % branch])
+                    haste_latest = await hastebin(latest, self.bot.session)
+                    if version == '1':
+                        status = 'Behind by 1 release%s [Latest update.](%s)' % (branch_note, haste_latest)
+                    else:
+                        status = '%s releases behind%s [Latest updates.](%s)' % (version, branch_note, haste_latest)
+                em.add_field(name=u'\U0001f4bb Update status:', value=status)
+            except:
+                pass
+            await ctx.send(content=None, embed=em)
+        else:
+            msg = '**Bot Stats:** ```Uptime: %s\nMessages Sent: %s\nMessages Received: %s\nMentions: %s\nguilds: %s\nKeywords logged: %s\nGame: %s```' % (
+            time, str(self.bot.icount), str(self.bot.message_count), str(self.bot.mention_count),
+            str(len(self.bot.guilds)), str(self.bot.keyword_log), game)
+            await ctx.send(self.bot.bot_prefix + msg)
+        await ctx.message.delete()
 
-    def bfeval(code, data=[0 for i in range(9999)], c_pos=0, d_pos=0):
-        outputty = None
-        while c_pos < len(code):
-            out = None
-            (data, c_pos, d_pos, step, output) = self.eval_step(code, data, c_pos, d_pos)
-            if outputty == None and output == None:
-                c_pos += step
-            elif outputty == None and out == None and output != None:
-                outputty = ''
-                out = ''
-                out = out + output
-                outputty = outputty + out
-                c_pos += step
-            elif out == None and output != None:
-                out = ''
-                out = out + output
-                outputty = outputty + out
-                c_pos += step
+    # Embeds the message
+    @commands.command(pass_context=True)
+    async def embed(self, ctx, *, msg: str = None):
+        """Embed given text. Ex: Do [p]embed for more help
+
+        Example: [p]embed title=test this | description=some words | color=3AB35E | field=name=test value=test
+
+        You do NOT need to specify every property, only the ones you want.
+
+        **All properties and the syntax:**
+        - title=<words>
+        - description=<words>
+        - color=<hex_value>
+        - image=<url_to_image> (must be https)
+        - thumbnail=<url_to_image>
+        - author=<words> **OR** author=name=<words> icon=<url_to_image>
+        - footer=<words> **OR** footer=name=<words> icon=<url_to_image>
+        - field=name=<words> value=<words> (you can add as many fields as you want)
+        - ptext=<words>
+
+        NOTE: After the command is sent, the bot will delete your message and replace it with the embed. Make sure you have it saved or else you'll have to type it all again if the embed isn't how you want it.
+        
+        PS: Hyperlink text like so:
+        \[text](https://www.whateverlink.com)
+
+        PPS: Force a field to go to the next line with the added parameter inline=False"""
+        if msg:
+            if embed_perms(ctx.message):
+                ptext = title = description = image = thumbnail = color = footer = author = None
+                timestamp = discord.Embed.Empty
+                embed_values = msg.split('|')
+                for i in embed_values:
+                    with open('settings/optional_config.json', 'r+') as fp:
+                        opt = json.load(fp)
+                        if opt['embed_color'] != "":
+                            color = opt['embed_color']
+                    if i.strip().lower().startswith('ptext='):
+                        ptext = i.strip()[6:].strip()
+                    elif i.strip().lower().startswith('title='):
+                        title = i.strip()[6:].strip()
+                    elif i.strip().lower().startswith('description='):
+                        description = i.strip()[12:].strip()
+                    elif i.strip().lower().startswith('desc='):
+                        description = i.strip()[5:].strip()
+                    elif i.strip().lower().startswith('image='):
+                        image = i.strip()[6:].strip()
+                    elif i.strip().lower().startswith('thumbnail='):
+                        thumbnail = i.strip()[10:].strip()
+                    elif i.strip().lower().startswith('colour='):
+                        color = i.strip()[7:].strip()
+                    elif i.strip().lower().startswith('color='):
+                        color = i.strip()[6:].strip()
+                    elif i.strip().lower().startswith('footer='):
+                        footer = i.strip()[7:].strip()
+                    elif i.strip().lower().startswith('author='):
+                        author = i.strip()[7:].strip()
+                    elif i.strip().lower().startswith('timestamp'):
+                        timestamp = ctx.message.created_at
+                    else:
+                        if description is None and not i.strip().lower().startswith('field='):
+                            description = i.strip()
+
+                if color:
+                    if color.startswith('#'):
+                        color = color[1:]
+                    if not color.startswith('0x'):
+                        color = '0x' + color
+
+                if ptext is title is description is image is thumbnail is color is footer is author is None and 'field=' not in msg:
+                    await ctx.message.delete()
+                    return await ctx.send(content=None,
+                                                       embed=discord.Embed(description=msg))
+
+                if color:
+                    em = discord.Embed(timestamp=timestamp, title=title, description=description, color=int(color, 16))
+                else:
+                    em = discord.Embed(timestamp=timestamp, title=title, description=description)
+                for i in embed_values:
+                    if i.strip().lower().startswith('field='):
+                        field_inline = True
+                        field = i.strip().lstrip('field=')
+                        field_name, field_value = field.split('value=')
+                        if 'inline=' in field_value:
+                            field_value, field_inline = field_value.split('inline=')
+                            if 'false' in field_inline.lower() or 'no' in field_inline.lower():
+                                field_inline = False
+                        field_name = field_name.strip().lstrip('name=')
+                        em.add_field(name=field_name, value=field_value.strip(), inline=field_inline)
+                if author:
+                    if 'icon=' in author:
+                        text, icon = author.split('icon=')
+                        if 'url=' in icon:
+                            em.set_author(name=text.strip()[5:], icon_url=icon.split('url=')[0].strip(), url=icon.split('url=')[1].strip())
+                        else:
+                            em.set_author(name=text.strip()[5:], icon_url=icon)
+                    else:
+                        if 'url=' in author:
+                            em.set_author(name=author.split('url=')[0].strip()[5:], url=author.split('url=')[1].strip())
+                        else:
+                            em.set_author(name=author)
+
+                if image:
+                    em.set_image(url=image)
+                if thumbnail:
+                    em.set_thumbnail(url=thumbnail)
+                if footer:
+                    if 'icon=' in footer:
+                        text, icon = footer.split('icon=')
+                        em.set_footer(text=text.strip()[5:], icon_url=icon)
+                    else:
+                        em.set_footer(text=footer)
+                await ctx.send(content=ptext, embed=em)
             else:
-                c_pos += step
-        return outputty
-
-    @commands.command()
-    async def bf(self, ctx, slurp:str):
-        '''Evaluate 'brainfuck' code (a retarded language).'''
-        thruput = ctx.message.content
-        preinput = thruput[5:]
-        preinput2 = "\"\"\"\n" + preinput
-        input = preinput2 + "\n\"\"\""
-        code = self.read(input)
-        output = self.bfeval(code)
-        await ctx.send("Input:\n`{}`\nOutput:\n`{}`".format(preinput, output))
-
-    @commands.command()
-    async def py(self, ctx, *, code):
-        '''Quick command to edit into a codeblock.'''
-        await ctx.message.edit(content=f'```py\n{code}\n```')
-
-    @commands.group(invoke_without_command=True, aliases=['anim'])
-    async def animate(self, ctx, *, file):
-        '''Animate a text file on discord!'''
+                await ctx.send(self.bot.bot_prefix + 'No embed permissions in this channel.')
+        else:
+            msg = '```How to use the >embed command:\nExample: >embed title=test this | description=some words | color=3AB35E | field=name=test value=test\n\nYou do NOT need to specify every property, only the ones you want.' \
+                  '\nAll properties and the syntax (put your custom stuff in place of the <> stuff):\ntitle=<words>\ndescription=<words>\ncolor=<hex_value>\nimage=<url_to_image> (must be https)\nthumbnail=<url_to_image>\nauthor=<words> **OR** author=name=<words> icon=<url_to_image>\nfooter=<words> ' \
+                  '**OR** footer=name=<words> icon=<url_to_image>\nfield=name=<words> value=<words> (you can add as many fields as you want)\nptext=<words>\n\nNOTE: After the command is sent, the bot will delete your message and replace it with ' \
+                  'the embed. Make sure you have it saved or else you\'ll have to type it all again if the embed isn\'t how you want it.\nPS: Hyperlink text like so: [text](https://www.whateverlink.com)\nPPS: Force a field to go to the next line with the added parameter inline=False```'
+            await ctx.send(self.bot.bot_prefix + msg)
         try:
-            with open(f'data/anims/{file}.txt') as a:
-                anim = a.read().splitlines()
+            await ctx.message.delete()
         except:
-            return await ctx.send('File not found.')
-        interval = anim[0]
-        for line in anim[1:]:
-            await ctx.message.edit(content=line)
-            await asyncio.sleep(float(interval))
+            pass
 
-    @animate.command()
-    async def list(self, ctx):
-        '''Lists all possible animations'''
-        await ctx.send(f"Available animations: `{', '.join([f[:-4] for f in os.listdir('data/anims') if f.endswith('.txt')])}`")
+    @commands.command(pass_context=True)
+    async def editembed(self, ctx, msg_id: int):
+        """Edit an embedded message."""
+        msg = await ctx.history(limit=100).get(id=msg_id)
+        if not msg:
+            await ctx.send(self.bot.bot_prefix + "That message couldn't be found.")
+        else:
+            try:
+                old_embed = msg.embeds[0]
+            except IndexError:
+                return await ctx.send("The message does not contain an embed.")
+            fields = old_embed.fields
+            result = []
+            if old_embed.title:
+                result.append("title={}".format(old_embed.title))
+            if old_embed.description:
+                result.append("description={}".format(old_embed.description))
+            if old_embed.color:
+                result.append("color={}".format(str(old_embed.color)[1:]))
+            if old_embed.url:
+                result.append("url={}".format(old_embed.url))
+            if old_embed.author:
+                author = "author=name=" + old_embed.author.name
+                if old_embed.author.icon_url:
+                    author += " icon=" + old_embed.author.icon_url
+                if old_embed.author.url:
+                    author += " url=" + old_embed.author.url
+                result.append(author)
+            if fields:
+                for field in fields:
+                    result.append("field=name={} value={} inline={}".format(field.name, field.value, field.inline))
+            if msg.content:
+                result.append("ptext={}".format(msg.content))
+            await ctx.message.edit(content=" | ".join(result))
+            info_msg = await ctx.send(self.bot.bot_prefix + "Embed has been turned back into its command form. Make your changes, then type `done` to finish editing.")
+            def check(event_msg):
+                return event_msg.content == "done" and event_msg.author == self.bot.user
 
-    @commands.command()
-    async def virus(self, ctx, virus=None, *, user: discord.Member = None):
-        '''
-        Destroy someone's device with this virus command!
-        '''
-        virus = virus or 'discord'
-        user = user or ctx.author
-        with open('data/virus.txt') as f:
-            animation = f.read().splitlines()
-        base = await ctx.send(animation[0])
-        for line in animation[1:]:
-            await base.edit(content=line.format(virus=virus, user=user))
-            await asyncio.sleep(random.randint(1, 4))
+            confirmation_msg = await self.bot.wait_for("message", check=check)
+            await info_msg.delete()
+            await confirmation_msg.delete()
+            # not proud of this code
+            ptext = ""
+            title = ""
+            description = ""
+            image = ""
+            thumbnail = ""
+            color = ""
+            footer = ""
+            author = ""
+            timestamp = discord.Embed().Empty
 
-    @commands.command()
-    async def react(self, ctx, index: int, *, reactions):
-        '''React to a specified message with reactions'''
-        history = await ctx.channel.history(limit=10).flatten()
-        message = history[index]
-        async for emoji in self.validate_emojis(ctx, reactions):
-            await message.add_reaction(emoji)
+            embed_values = ctx.message.content.split('|')
+            for i in embed_values:
+                with open('settings/optional_config.json', 'r+') as fp:
+                    opt = json.load(fp)
+                    if opt['embed_color'] != "":
+                        color = opt['embed_color']
+                if i.strip().lower().startswith('ptext='):
+                    ptext = i.strip()[6:].strip()
+                elif i.strip().lower().startswith('title='):
+                    title = i.strip()[6:].strip()
+                elif i.strip().lower().startswith('description='):
+                    description = i.strip()[12:].strip()
+                elif i.strip().lower().startswith('desc='):
+                    description = i.strip()[5:].strip()
+                elif i.strip().lower().startswith('image='):
+                    image = i.strip()[6:].strip()
+                elif i.strip().lower().startswith('thumbnail='):
+                    thumbnail = i.strip()[10:].strip()
+                elif i.strip().lower().startswith('colour='):
+                    color = i.strip()[7:].strip()
+                elif i.strip().lower().startswith('color='):
+                    color = i.strip()[6:].strip()
+                elif i.strip().lower().startswith('footer='):
+                    footer = i.strip()[7:].strip()
+                elif i.strip().lower().startswith('author='):
+                    author = i.strip()[7:].strip()
+                elif i.strip().lower().startswith('timestamp'):
+                    timestamp = ctx.message.timestamp
+                else:
+                    if description is None and not i.strip().lower().startswith('field='):
+                        description = i.strip()
 
-    async def validate_emojis(self, ctx, reactions):
-        '''
-        Checks if an emoji is valid otherwise,
-        tries to convert it into a custom emoji
-        '''
-        for emote in reactions.split():
-            if emote in emoji.UNICODE_EMOJI:
-                yield emote
+            if color:
+                if color.startswith('#'):
+                    color = color[1:]
+                if not color.startswith('0x'):
+                    color = '0x' + color
+
+            if color:
+                em = discord.Embed(timestamp=timestamp, title=title, description=description, color=int(color, 16))
+            else:
+                em = discord.Embed(timestamp=timestamp, title=title, description=description)
+            for i in embed_values:
+                if i.strip().lower().startswith('field='):
+                    field_inline = True
+                    field = i.strip().lstrip('field=')
+                    field_name, field_value = field.split('value=')
+                    if 'inline=' in field_value:
+                        field_value, field_inline = field_value.split('inline=')
+                        if 'false' in field_inline.lower() or 'no' in field_inline.lower():
+                            field_inline = False
+                    field_name = field_name.strip().lstrip('name=')
+                    em.add_field(name=field_name, value=field_value.strip(), inline=field_inline)
+            if author:
+                if 'icon=' in author:
+                    text, icon = author.split('icon=')
+                    if 'url=' in icon:
+                        em.set_author(name=text.strip()[5:], icon_url=icon.split('url=')[0].strip(), url=icon.split('url=')[1].strip())
+                    else:
+                        em.set_author(name=text.strip()[5:], icon_url=icon)
+                else:
+                    if 'url=' in author:
+                        em.set_author(name=author.split('url=')[0].strip()[5:], url=author.split('url=')[1].strip())
+                    else:
+                        em.set_author(name=author)
+            if image:
+                em.set_image(url=image)
+            if thumbnail:
+                em.set_thumbnail(url=thumbnail)
+            if footer:
+                if 'icon=' in footer:
+                    text, icon = footer.split('icon=')
+                    em.set_footer(text=text.strip()[5:], icon_url=icon)
+                else:
+                    em.set_footer(text=footer)
+            await ctx.message.delete()
+            if not ptext:
+                await msg.edit(content=None, embed=em)
+            else:
+                await msg.edit(content=ptext, embed=em)
+
+    @commands.command(pass_context=True)
+    async def embedcolor(self, ctx, *, color: str = None):
+        """Set color (hex) of a embeds. Ex: [p]embedcolor 000000"""
+        if color == 'auto':
+            color = str(ctx.message.author.top_role.color)[1:]
+
+        with open('settings/optional_config.json', 'r+') as fp:
+            opt = json.load(fp)
+            if color:
+                try:
+                    color = color.lstrip('#')
+                    if color.startswith('0x'):
+                        color = color[2:]
+                    int(color, 16)
+                except ValueError:
+                    return await ctx.send(self.bot.bot_prefix + 'Invalid color.')
+                opt['embed_color'] = color
+                await ctx.send(self.bot.bot_prefix + 'Successfully set color for embeds.')
+            else:
+                opt['embed_color'] = ""
+                await ctx.send(self.bot.bot_prefix + 'Set default embed color off for embed command. You will now need to specify the color parameter if you want your embed to be colored when using the embed command.')
+
+            fp.seek(0)
+            fp.truncate()
+            json.dump(opt, fp, indent=4)
+
+    @commands.command(pass_context=True, aliases=['stream', 'watching', 'listening'])
+    async def game(self, ctx, *, game: str = None):
+        """Set game/stream. Ex: [p]game napping [p]help game for more info
+
+        Your game/stream status will not show for yourself, only other people can see it. This is a limitation of how the client works and how the api interacts with the client.
+
+        --Setting playing/watching/listening--
+        Set a game: [p]game <text>
+        Set watching: [p]watching <text>
+        Set listening: [p]listening <text>
+        To set a rotating game status, do [p]game game1 | game2 | game3 | etc.
+        It will then prompt you with an interval in seconds to wait before changing the game and after that the order in which to change (in order or random)
+        Ex: [p]game with matches | sleeping | watching anime
+
+        --Setting stream--
+        Same as above but you also need a link to the stream. (must be a valid link to a stream or else the status will not show as streaming).
+        Add the link like so: <words>=<link>
+        Ex: [p]stream Underwatch=https://www.twitch.tv/a_seagull
+        or [p]stream Some moba=https://www.twitch.tv/doublelift | Underwatch=https://www.twitch.tv/a_seagull"""
+        is_stream = False
+        if ctx.invoked_with == "game":
+            message = "Playing"
+            self.bot.status_type = discord.ActivityType.playing
+        elif ctx.invoked_with == "stream":
+            is_stream = True
+            self.bot.status_type = discord.ActivityType.streaming
+            self.bot.is_stream = True
+        elif ctx.invoked_with == "watching":
+            message = "Watching"
+            self.bot.status_type = discord.ActivityType.watching
+        elif ctx.invoked_with == "listening":
+            message = "Listening to"
+            self.bot.status_type = discord.ActivityType.listening
+        if game:
+            # Cycle games if more than one game is given.
+            if ' | ' in game:
+                await ctx.send(self.bot.bot_prefix + 'Input interval in seconds to wait before changing (``n`` to cancel):')
+
+                def check(msg):
+                    return (msg.content.isdigit() or msg.content.lower().strip() == 'n') and msg.author == self.bot.user
+
+                def check2(msg):
+                    return (msg.content == 'random' or msg.content.lower().strip() == 'r' or msg.content.lower().strip() == 'order' or msg.content.lower().strip() == 'o') and msg.author == self.bot.user
+
+                reply = await self.bot.wait_for("message", check=check)
+                if not reply:
+                    return
+                if reply.content.lower().strip() == 'n':
+                    return await ctx.send(self.bot.bot_prefix + 'Cancelled')
+                elif reply.content.strip().isdigit():
+                    interval = int(reply.content.strip())
+                    if interval >= 10:
+                        self.bot.game_interval = interval
+                        games = game.split(' | ')
+                        if len(games) != 2:
+                            await ctx.send(self.bot.bot_prefix + 'Change in order or randomly? Input ``o`` for order or ``r`` for random:')
+                            s = await self.bot.wait_for("message", check=check2)
+                            if not s:
+                                return
+                            if s.content.strip() == 'r' or s.content.strip() == 'random':
+                                await ctx.send(self.bot.bot_prefix + '{status} set. {status} will randomly change every ``{time}`` seconds'.format(
+                                                                status=message, time=reply.content.strip()))
+                                loop_type = 'random'
+                            else:
+                                loop_type = 'ordered'
+                        else:
+                            loop_type = 'ordered'
+
+                        if loop_type == 'ordered':
+                            await ctx.send(self.bot.bot_prefix + '{status} set. {status} will change every ``{time}`` seconds'.format(
+                                                            status=message, time=reply.content.strip()))
+
+                        stream = 'yes' if is_stream else 'no'
+                        games = {'games': game.split(' | '), 'interval': interval, 'type': loop_type, 'stream': stream, 'status': self.bot.status_type}
+                        with open('settings/games.json', 'w') as g:
+                            json.dump(games, g, indent=4)
+
+                        self.bot.game = game.split(' | ')[0]
+
+                    else:
+                        return await ctx.send(self.bot.bot_prefix + 'Cancelled. Interval is too short. Must be at least 10 seconds.')
+
+            # Set game if only one game is given.
+            else:
+                self.bot.game_interval = None
+                self.bot.game = game
+                stream = 'yes' if is_stream else 'no'
+                games = {'games': str(self.bot.game), 'interval': '0', 'type': 'none', 'stream': stream, 'status': self.bot.status_type}
+                with open('settings/games.json', 'w') as g:
+                    json.dump(games, g, indent=4)
+                if is_stream and '=' in game:
+                    g, url = game.split('=')
+                    await ctx.send(self.bot.bot_prefix + 'Stream set as: ``Streaming %s``' % g)
+                    await self.bot.change_presence(activity=discord.Streaming(name=g, url=url))
+                else:
+                    await ctx.send(self.bot.bot_prefix + 'Game set as: ``{} {}``'.format(message, game))
+                    await self.bot.change_presence(activity=discord.Activity(name=game, type=self.bot.status_type))
+
+        # Remove game status.
+        else:
+            self.bot.game_interval = None
+            self.bot.game = None
+            self.bot.is_stream = False
+            await self.bot.change_presence(activity=None)
+            await ctx.send(self.bot.bot_prefix + 'Set playing status off')
+            if os.path.isfile('settings/games.json'):
+                os.remove('settings/games.json')
+
+    @commands.group(aliases=['avatars'], pass_context=True)
+    async def avatar(self, ctx):
+        """Rotate avatars. See wiki for more info."""
+
+        if ctx.invoked_subcommand is None:
+            with open('settings/avatars.json', 'r+') as a:
+                avi_config = json.load(a)
+            if avi_config['password'] == '':
+                return await ctx.send(self.bot.bot_prefix + 'Cycling avatars requires you to input your password. Your password will not be sent anywhere and no one will have access to it. '
+                                                                'Enter your password with``>avatar password <password>`` Make sure you are in a private channel where no one can see!')
+            if avi_config['interval'] != '0':
+                self.bot.avatar = None
+                self.bot.avatar_interval = None
+                avi_config['interval'] = '0'
+                with open('settings/avatars.json', 'w') as avi:
+                    json.dump(avi_config, avi, indent=4)
+                await ctx.send(self.bot.bot_prefix + 'Disabled cycling of avatars.')
+            else:
+                if os.listdir('avatars'):
+                    await ctx.send(self.bot.bot_prefix + 'Enabled cycling of avatars. Input interval in seconds to wait before changing avatars (``n`` to cancel):')
+
+                    def check(msg):
+                        return (msg.content.isdigit() or msg.content.lower().strip() == 'n') and msg.author == self.bot.user
+
+                    def check2(msg):
+                        return (msg.content == 'random' or msg.content.lower().strip() == 'r' or msg.content.lower().strip() == 'order' or msg.content.lower().strip() == 'o') and msg.author == self.bot.user
+
+                    interval = await self.bot.wait_for("message", check=check)
+                    if not interval:
+                        return
+                    if interval.content.lower().strip() == 'n':
+                        return await ctx.send(self.bot.bot_prefix + 'Cancelled.')
+                    elif int(interval.content) < 1800:
+                        return await ctx.send(self.bot.bot_prefix + 'Cancelled. Interval is too short. Must be at least 1800 seconds (30 minutes).')
+                    else:
+                        avi_config['interval'] = int(interval.content)
+                    if len(os.listdir('avatars')) != 2:
+                        await ctx.send(self.bot.bot_prefix + 'Change avatars in order or randomly? Input ``o`` for order or ``r`` for random:')
+                        cycle_type = await self.bot.wait_for("message", check=check2)
+                        if not cycle_type:
+                            return
+                        if cycle_type.content.strip() == 'r' or cycle_type.content.strip() == 'random':
+                            await ctx.send(self.bot.bot_prefix + 'Avatar cycling enabled. Avatar will randomly change every ``%s`` seconds' % interval.content.strip())
+                            loop_type = 'random'
+                        else:
+                            loop_type = 'ordered'
+                    else:
+                        loop_type = 'ordered'
+                    avi_config['type'] = loop_type
+                    if loop_type == 'ordered':
+                        await ctx.send(self.bot.bot_prefix + 'Avatar cycling enabled. Avatar will change every ``%s`` seconds' % interval.content.strip())
+                    with open('settings/avatars.json', 'r+') as avi:
+                        avi.seek(0)
+                        avi.truncate()
+                        json.dump(avi_config, avi, indent=4)
+                    self.bot.avatar_interval = interval.content
+                    self.bot.avatar_time = time.time()
+                    self.bot.avatar = random.choice(os.listdir('avatars')) if loop_type == "random" else sorted(os.listdir('avatars'))[0]
+                    with open('avatars/%s' % self.bot.avatar, 'rb') as fp:
+                        await self.bot.user.edit(password=avi_config['password'], avatar=fp.read())
+
+                else:
+                    await ctx.send(self.bot.bot_prefix + 'No images found under ``avatars``. Please add images (.jpg .jpeg and .png types only) to that folder and try again.')
+
+    @avatar.command(aliases=['pass', 'pw'], pass_context=True)
+    async def password(self, ctx, *, msg):
+        """Set your discord acc password to rotate avatars. See wiki for more info."""
+        avi_config = dataIO.load_json('settings/avatars.json')
+        avi_config['password'] = msg.strip().strip('"').lstrip('<').rstrip('>')
+        dataIO.save_json('settings/avatars.json', avi_config)
+        opt = dataIO.load_json('settings/optional_config.json')
+        opt['password'] = avi_config['password']
+        dataIO.save_json('settings/optional_config.json', opt)
+        await ctx.message.delete()
+        return await ctx.send(self.bot.bot_prefix + 'Password set. Do ``>avatar`` to toggle cycling avatars.')
+
+    @commands.command(pass_context=True)
+    async def setavatar(self, ctx, *, msg):
+        """
+        Set an avatar from a URL or user.
+        Usage: [p]setavatar <url_to_image> or [p]setavatar <user> to copy that user's avi
+        Image URL must be a .png, a .jpg, or a .gif (nitro only)
+        """
+        user = get_user(ctx.message, msg)
+        if user:
+            url = user.avatar_url_as(static_format='png')
+        else:
+            url = msg
+        if ".gif" in url and not self.bot.user.premium:
+            await ctx.send(self.bot.bot_prefix + "Warning: attempting to copy an animated avatar without Nitro. Only the first frame will be set.")
+        response = requests.get(url, stream=True)
+        img = io.BytesIO()
+        for block in response.iter_content(1024):
+            if not block:
+                break
+
+            img.write(block)
+
+        if url:
+            img.seek(0)
+            imgbytes = img.read()
+            img.close()
+            with open('settings/avatars.json', 'r+') as fp:
+                opt = json.load(fp)
+                if opt['password']:
+                    if opt['password'] == "":
+                        await ctx.send(self.bot.bot_prefix + "You have not set your password yet in `settings/avatars.json` Please do so and try again")
+                    else:
+                        pw = opt['password']
+                        try:
+                            await self.bot.user.edit(password=pw, avatar=imgbytes)
+                            await ctx.send(self.bot.bot_prefix + "Your avatar has been set to the specified image.")
+                        except discord.errors.HTTPException:
+                            await ctx.send(self.bot.bot_prefix + "You are being rate limited!")
+                else:
+                    await ctx.send("You have not set your password yet in `settings/avatars.json` Please do so and try again")
+        else:
+            await ctx.send(self.bot.bot_prefix + 'Could not find image.')
+
+
+    @commands.command(pass_context=True)
+    async def ping(self, ctx):
+        """Get response time."""
+        msgtime = ctx.message.created_at.now()
+        await (await self.bot.ws.ping())
+        now = datetime.datetime.now()
+        ping = now - msgtime
+        if embed_perms(ctx.message):
+            pong = discord.Embed(title='Pong! Response Time:', description=str(ping.microseconds / 1000.0) + ' ms',
+                                 color=0x7A0000)
+            pong.set_thumbnail(url='http://odysseedupixel.fr/wp-content/gallery/pong/pong.jpg')
+            await ctx.send(content=None, embed=pong)
+        else:
+            await ctx.send(self.bot.bot_prefix + '``Response Time: %s ms``' % str(ping.microseconds / 1000.0))
+
+    @commands.command(pass_context=True)
+    async def quotecolor(self, ctx, *, msg):
+        '''Set color (hex) of a quote embed.\n`[p]quotecolor 000000` to set the quote color to black.\n`[p]quotecolor auto` to set it to the color of the highest role the quoted person has.'''
+        if msg:
+            if msg == "auto":
+                await ctx.send(self.bot.bot_prefix + 'Successfully set color for quote embeds.')
             else:
                 try:
-                    yield await self.emoji_converter.convert(ctx, emote)
-                except commands.BadArgument:
-                    pass
-
-    @commands.command(aliases=['color', 'colour', 'sc'])
-    async def show_color(self, ctx, *, color: discord.Colour):
-        '''Enter a color and you will see it!'''
-        file = io.BytesIO()
-        Image.new('RGB', (200, 90), color.to_rgb()).save(file, format='PNG')
-        file.seek(0)
-        em = discord.Embed(color=color, title=f'Showing Color: {str(color)}')
-        em.set_image(url='attachment://color.png')
-        await ctx.send(file=discord.File(file, 'color.png'), embed=em)
-
-    @commands.command(aliases=['dc', 'dominant_color'])
-    async def dcolor(self, ctx, *, url):
-        '''Fun command that shows the dominant color of an image'''
-        await ctx.message.delete()
-        color = await ctx.get_dominant_color(url)
-        string_col = ColorNames.color_name(str(color))
-        info = f'`{str(color)}`\n`{color.to_rgb()}`\n`{str(string_col)}`'
-        em = discord.Embed(color=color, title='Dominant Color', description=info)
-        em.set_thumbnail(url=url)
-        file = io.BytesIO()
-        Image.new('RGB', (200, 90), color.to_rgb()).save(file, format='PNG')
-        file.seek(0)
-        em.set_image(url="attachment://color.png")
-        await ctx.send(file=discord.File(file, 'color.png'), embed=em)
-
-    @commands.command(description='This command might get you banned')
-    async def annoy(self, ctx, member: discord.Member=None, number: int=5):
-        """ Usage: annoy @b1nzy#1337 50
-        NOTICE: If you get banned, don't come back crying! """
-        if number > 5:
-            number = 5
-        member = member or ctx.author
-        try:
-            await ctx.message.delete()
-        except discord.Forbidden:
-            pass
-        if member != None:
-            for x in range(number):
-                await ctx.channel.trigger_typing()
-                await ctx.send(member.mention)
-                await asyncio.sleep(8)
+                    msg = msg.lstrip('#')
+                    int(msg, 16)
+                    await ctx.send(self.bot.bot_prefix + 'Successfully set color for quote embeds.')
+                except:
+                    await ctx.send(self.bot.bot_prefix + 'Invalid color.')
         else:
-            return await ctx.send(f"{ctx.author.mention}, I don't know how to use commands. Help!")
+            await ctx.send(self.bot.bot_prefix + 'Use this command to set color to quote embeds. Usage is `>quotecolor <hex_color_value>`')
+            return
+        with open('settings/optional_config.json', 'r+') as fp:
+            opt = json.load(fp)
+            opt['quoteembed_color'] = msg
+            fp.seek(0)
+            fp.truncate()
+            json.dump(opt, fp, indent=4)
 
-    @commands.command()
-    async def tinyurl(self, ctx, *, link: str):
-        await ctx.message.delete()
-        url = 'http://tinyurl.com/api-create.php?url=' + link
-        async with ctx.session.get(url) as resp:
-            new = await resp.text()
-        emb = discord.Embed(colour=await ctx.get_dominant_color(ctx.author.avatar_url))
-        emb.add_field(name="Original Link", value=link, inline=False)
-        emb.add_field(name="Shortened Link", value=new, inline=False)
-        await ctx.send(embed=emb)
-
-    @commands.command(aliases=['calc', 'maths'])
-    async def calculate(self, ctx, *, formula=None):
+    @commands.command(aliases=['q'], pass_context=True)
+    async def quote(self, ctx, *, msg: str = ""):
+        """Quote a message. [p]help quote for more info.
+        [p]quote - quotes the last message sent in the channel.
+        [p]quote <words> - tries to search for a message in the server that contains the given words and quotes it.
+        [p]quote <message_id> - quotes the message with the given message ID. Ex: [p]quote 302355374524644290 (enable developer mode to copy message IDs)
+        [p]quote <user_mention_name_or_id> - quotes the last message sent by a specific user
+        [p]quote <words> | channel=<channel_name> - quotes the message with the given words in a specified channel
+        [p]quote <message_id> | channel=<channel_name> - quotes the message with the given message ID in a specified channel
+        [p]quote <user_mention_name_or_id> | channel=<channel_name> - quotes the last message sent by a specific user in a specified channel
         """
-        Do some real math
-        finally a working command for mathematics
-        thanks to Paul McGuire's fourFn.py module
-        """
-        person = ctx.message.author
-        user = ctx.author
-
-        if formula == None:
-            # How can it calculate an empty message? Reee!
-            msg = f'\u200BUsage: `{ctx.prefix}{ctx.invoked_with} [any maths formula]`'
-            e = discord.Embed()
-            e.color = await ctx.get_dominant_color(user.avatar_url)
-            e.description = f'{msg}'
-            await ctx.send(embed=e)
-            return
-
-        try:
-            answer=self.nsp.eval(formula)
-        except:
-            # If there's a problem in the input, show examples
-            msg = f'\N{THINKING FACE} wrong {formula} input.\nTry any of these:'
-            e = discord.Embed()
-            e.color = await ctx.get_dominant_color(user.avatar_url)
-            e.description = f'\u200B{msg}'
-            e.add_field(name='multiplication', value="`num` * `num`", inline=True)
-            e.add_field(name='division', value="`num` / `num`", inline=True)
-            e.add_field(name='addition', value="`num` + `num`", inline=True)
-            e.add_field(name='rest', value="`num` - `num`", inline=True)
-            e.add_field(name='exponential', value="`num` ^ `num`")
-            e.add_field(name='integer', 
-                        value="[`num` + `num` | `num` - `num`] `num` 0 `num`..`num` 9 `num` +")
-            await ctx.send(embed=e, delete_after=60)
-            return
-
-        # Correct input prints correct answer
-        e = discord.Embed()
-        e.color = await ctx.get_dominant_color(user.avatar_url)
-        e.add_field(name='Input:', value=f'```{formula}```', inline=True)
-        e.add_field(name='Result:', value=f'```{round(answer, 2)}```', inline=True)
-        await ctx.send(embed=e)
-
-    @commands.command()
-    async def algebra(self, ctx, *, equation):
-        '''Solve algabraic equations'''
-        eq = parse_equation(equation)
-        result = solve(eq)
-        em = discord.Embed()
-        em.color = discord.Color.green()
-        em.title = 'Equation'
-        em.description = f'```py\n{equation} = 0```'
-        em.add_field(name='Result', value=f'```py\n{result}```')
-        await ctx.send(embed=em)
-
-    def check_emojis(self, bot_emojis, emoji):
-        for exist_emoji in bot_emojis:
-            if emoji[0] == "<" or emoji[0] == "":
-                if exist_emoji.name.lower() == emoji[1]:
-                    return [True, exist_emoji]
-            else:
-                if exist_emoji.name.lower() == emoji[0]:
-                    return [True, exist_emoji]
-        return [False, None]
-
-    @commands.group(invoke_without_command=True, name='emoji', aliases=['emote', 'e'])
-    async def _emoji(self, ctx, *, emoji: str):
-        '''Use emojis without nitro!'''
-        emoji = emoji.split(":")
-        emoji_check = self.check_emojis(ctx.bot.emojis, emoji)
-        if emoji_check[0]:
-            emo = emoji_check[1]
-        else:
-            emoji = [e.lower() for e in emoji]
-            if emoji[0] == "<" or emoji[0] == "":
-                emo = discord.utils.find(lambda e: emoji[1] in e.name.lower(), ctx.bot.emojis)
-            else:
-                emo = discord.utils.find(lambda e: emoji[0] in e.name.lower(), ctx.bot.emojis)
-            if emo == None:
-                em = discord.Embed(title="Send Emoji", description="Could not find emoji.")
-                em.color = await ctx.get_dominant_color(ctx.author.avatar_url)
-                await ctx.send(embed=em)
-                return
-        await ctx.send(str(emo))
-
-    @_emoji.command()
-    @commands.has_permissions(manage_emojis=True)
-    async def copy(self, ctx, *, emoji: str):
-        '''Copy an emoji from another server to your own'''
-        if len(ctx.message.guild.emojis) == 50:
-            await ctx.message.delete()
-            await ctx.send('Your Server has already hit the 50 Emoji Limit!')
-            return
-        emo_check = self.check_emojis(ctx.bot.emojis, emoji.split(":"))
-        if emo_check[0]:
-            emo = emo_check[1]
-        else:
-            emo = discord.utils.find(lambda e: emoji.replace(":", "") in e.name, ctx.bot.emojis)
-        em = discord.Embed()
-        em.color = await ctx.get_dominant_color(ctx.author.avatar_url)
-        if emo == None:
-            em.title = 'Add Emoji'
-            em.description = 'Could not find emoji.'
-            await ctx.send(embed=em)
-            return
-        em.title = f'Added Emoji: {emo.name}'
-        em.set_image(url='attachment://emoji.png')
-        async with ctx.session.get(emo.url) as resp:
-            image = await resp.read()
-        with io.BytesIO(image) as file:
-            await ctx.send(embed=em, file=discord.File(copy.deepcopy(file), 'emoji.png'))
-            await ctx.guild.create_custom_emoji(name=emo.name, image=file.read())
-
-    @commands.command(aliases=['emotes'])
-    async def emojis(self, ctx):
-        '''Lists all emojis in a server'''
-        emotes = '\n'.join(['{1} `:{0}:`'.format(e.name, str(e)) for e in ctx.message.guild.emojis])
-        if len(emotes) > 2000:
-            paginated_text = ctx.paginate(emotes)
-            for page in paginated_text:
-                if page == paginated_text[-1]:
-                    await ctx.send(f'{page}')
+        
+        await ctx.message.delete()
+        result = None
+        channels = [ctx.channel] + [x for x in ctx.guild.channels if x != ctx.channel and type(x) == discord.channel.TextChannel]
+        
+        args = msg.split(" | ")
+        msg = args[0]
+        if len(args) > 1:
+            channel = args[1].split("channel=")[1]
+            channels = []
+            for chan in ctx.guild.channels:
+                if chan.name == channel or str(chan.id) == channel:
+                    channels.append(chan)
                     break
-                await ctx.send(f'{page}')
-            # for page in pages:
-            #     await ctx.send(page)
-            # async with ctx.session.post("https://hastebin.com/documents", data=code) as resp:
-            #     data = await resp.json()
-            # await ctx.send(content=f"Here are all the emotes you have: <https://hastebin.com/{data['key']}.py>")
+            else:
+                for guild in self.bot.guilds:
+                    for chan in guild.channels:
+                        if chan.name == channel or str(chan.id) == channel and type(chan) == discord.channel.TextChannel:
+                            channels.append(chan)
+                            break
+            if not channels:
+                return await ctx.send(self.bot.bot_prefix + "The specified channel could not be found.")
+            
+        user = get_user(ctx.message, msg)
 
-            #await ctx.send()
+        async def get_quote(msg, channels, user):
+            for channel in channels:
+                try:
+                    if user:
+                        async for message in channel.history(limit=500):
+                            if message.author == user:
+                                return message
+                    if len(msg) > 15 and msg.isdigit():
+                        async for message in channel.history(limit=500):
+                            if str(message.id) == msg:
+                                return message
+                    else:
+                        async for message in channel.history(limit=500):
+                            if msg in message.content:
+                                return message
+                except discord.Forbidden:
+                    continue
+            return None
+            
+        if msg:
+            result = await get_quote(msg, channels, user)
         else:
-            await ctx.send(emotes)
-
-    @commands.command()
-    async def urban(self, ctx, *, search_terms: str):
-        '''Searches Up a Term in Urban Dictionary'''
-        client = urbanasync.Client(ctx.session)
-        search_terms = search_terms.split()
-        definition_number = terms = None
-        try:
-            definition_number = int(search_terms[-1]) - 1
-            search_terms.remove(search_terms[-1])
-        except ValueError:
-            definition_number = 0
-        if definition_number not in range(0, 11):
-            pos = 0
-        search_terms = " ".join(search_terms)
-        emb = discord.Embed()
-        try:
-            term = await client.get_term(search_terms)
-        except LookupError:
-            emb.title = "Search term not found."
-            return await ctx.send(embed=emb)
-        emb.color = await ctx.get_dominant_color(url=ctx.message.author.avatar_url)
-        definition = term.definitions[definition_number]
-        emb.title = f"{definition.word}  ({definition_number+1}/{len(term.definitions)})"
-        emb.description = definition.definition
-        emb.url = definition.permalink
-        emb.add_field(name='Example', value=definition.example)
-        emb.add_field(name='Votes', value=f'{definition.upvotes}👍    {definition.downvotes}👎')
-        emb.set_footer(text=f"Definition written by {definition.author}", icon_url="http://urbandictionary.com/favicon.ico")
-        await ctx.send(embed=emb)
-
-    @commands.group(invoke_without_command=True)
-    async def lenny(self, ctx):
-        """Lenny and tableflip group commands"""
-        msg = 'Available: `{}lenny face`, `{}lenny shrug`, `{}lenny tableflip`, `{}lenny unflip`'
-        await ctx.send(msg.format(ctx.prefix))
-
-    @lenny.command()
-    async def shrug(self, ctx):
-        """Shrugs!"""
-        await ctx.message.edit(content='¯\\\_(ツ)\_/¯')
-
-    @lenny.command()
-    async def tableflip(self, ctx):
-        """Tableflip!"""
-        await ctx.message.edit(content='(╯°□°）╯︵ ┻━┻')
-
-    @lenny.command()
-    async def unflip(self, ctx):
-        """Unfips!"""
-        await ctx.message.edit(content='┬─┬﻿ ノ( ゜-゜ノ)')
-
-    @lenny.command()
-    async def face(self, ctx):
-        """Lenny Face!"""
-        await ctx.message.edit(content='( ͡° ͜ʖ ͡°)')
-
-    @commands.command(aliases=['8ball'])
-    async def eightball(self, ctx, *, question=None):
-        """Ask questions to the 8ball"""
-        with open('data/answers.json') as f:
-            choices = json.load(f)
-        author = ctx.message.author
-        emb = discord.Embed()
-        emb.color = await ctx.get_dominant_color(url=author.avatar_url)
-        emb.set_author(name='\N{WHITE QUESTION MARK ORNAMENT} Your question:', icon_url=author.avatar_url)
-        emb.description = question
-        emb.add_field(name='\N{BILLIARDS} Your answer:', value=random.choice(choices), inline=True)
-        await ctx.send(embed=emb)
-    
-    @commands.command()
-    async def ascii(self, ctx, *, text):
-        async with ctx.session.get(f"http://artii.herokuapp.com/make?text={urllib.parse.quote_plus(text)}") as f:
-            message = await f.text()
-        if len('```' + message + '```') > 2000:
-            await ctx.send('Your ASCII is too long!')
-            return
-        await ctx.send('```' + message + '```')
-
-    @commands.command()
-    async def whoisplaying(self, ctx, *, game):
-        message = ''
-        for member in ctx.guild.members:
-            if member.game != None:
-                if member.game.name == game:
-                    message += str(member) + '\n'
-        await ctx.send(embed=discord.Embed(title=f'Who is playing {game}?', description = message, color=await ctx.get_dominant_color(url=ctx.message.author.avatar_url)))
-
-    @commands.command()
-    async def nickscan(self, ctx):
-        message = '**Server | Nick**\n'
-        for guild in self.bot.guilds:
-            if guild.me.nick != None:
-                message += f'{guild.name} | {guild.me.nick}\n'
-
-        await ctx.send(embed=discord.Embed(title=f'Servers I Have Nicknames In', description = message, color=await ctx.get_dominant_color(url=ctx.message.author.avatar_url)))
-
-    @commands.command()
-    async def textmojify(self, ctx, *, msg):
-        """Convert text into emojis"""
-        try:
-            await ctx.message.delete()
-        except discord.Forbidden:
-            pass
-
-        if msg != None:
-            out = msg.lower()
-            text = out.replace(' ', '    ').replace('10', '\u200B:keycap_ten:')\
-                      .replace('ab', '\u200B🆎').replace('cl', '\u200B🆑')\
-                      .replace('0', '\u200B:zero:').replace('1', '\u200B:one:')\
-                      .replace('2', '\u200B:two:').replace('3', '\u200B:three:')\
-                      .replace('4', '\u200B:four:').replace('5', '\u200B:five:')\
-                      .replace('6', '\u200B:six:').replace('7', '\u200B:seven:')\
-                      .replace('8', '\u200B:eight:').replace('9', '\u200B:nine:')\
-                      .replace('!', '\u200B❗').replace('?', '\u200B❓')\
-                      .replace('vs', '\u200B🆚').replace('.', '\u200B🔸')\
-                      .replace(',', '🔻').replace('a', '\u200B🅰')\
-                      .replace('b', '\u200B🅱').replace('c', '\u200B🇨')\
-                      .replace('d', '\u200B🇩').replace('e', '\u200B🇪')\
-                      .replace('f', '\u200B🇫').replace('g', '\u200B🇬')\
-                      .replace('h', '\u200B🇭').replace('i', '\u200B🇮')\
-                      .replace('j', '\u200B🇯').replace('k', '\u200B🇰')\
-                      .replace('l', '\u200B🇱').replace('m', '\u200B🇲')\
-                      .replace('n', '\u200B🇳').replace('ñ', '\u200B🇳')\
-                      .replace('o', '\u200B🅾').replace('p', '\u200B🅿')\
-                      .replace('q', '\u200B🇶').replace('r', '\u200B🇷')\
-                      .replace('s', '\u200B🇸').replace('t', '\u200B🇹')\
-                      .replace('u', '\u200B🇺').replace('v', '\u200B🇻')\
-                      .replace('w', '\u200B🇼').replace('x', '\u200B🇽')\
-                      .replace('y', '\u200B🇾').replace('z', '\u200B🇿')
-            try:
-                await ctx.send(text)
-            except Exception as e:
-                await ctx.send(f'```{e}```')
+            async for message in ctx.channel.history(limit=1):
+                result = message
+        
+        if result:
+            if type(result.author) == discord.User:
+                sender = result.author.name
+            else:
+                sender = result.author.nick if result.author.nick else result.author.name
+            if embed_perms(ctx.message) and result.content:
+                color = get_config_value("optional_config", "quoteembed_color")
+                if color == "auto":
+                    color = result.author.top_role.color
+                elif color == "":
+                    color = 0xbc0b0b
+                else:
+                    color = int('0x' + color, 16)
+                em = discord.Embed(color=color, description=result.content, timestamp=result.created_at)
+                em.set_author(name=sender, icon_url=result.author.avatar_url)
+                footer = ""
+                if result.channel != ctx.channel:
+                    footer += "#" + result.channel.name
+                    
+                if result.guild != ctx.guild:
+                    footer += " | " + result.guild.name
+                    
+                if footer:
+                    em.set_footer(text=footer)
+                await ctx.send(embed=em)
+            elif result.content:
+                await ctx.send('%s - %s```%s```' % (sender, result.created_at, result.content))
+            else:
+                await ctx.send(self.bot.bot_prefix + "Embeds cannot be quoted.")
         else:
-            await ctx.send('Write something, reee!', delete_after=3.0)
+            await ctx.send(self.bot.bot_prefix + 'No quote found.')
 
-    @commands.command(aliases=['yt', 'vid', 'video'])
-    async def youtube(self, ctx, *, search):
-        """Search for videos on YouTube"""
-        search = search.replace(' ', '+').lower()
-        response = requests.get(f"https://www.youtube.com/results?search_query={search}").text
-        result = BeautifulSoup(response, "lxml")
-        dir_address = f"{result.find_all(attrs={'class': 'yt-uix-tile-link'})[0].get('href')}"
-        output=f"**Top Result:**\nhttps://www.youtube.com{dir_address}"
-        try:
-            await ctx.send(output)
-            await ctx.message.delete()
-        except discord.Forbidden:
-            pass
+    @commands.command(pass_context=True)
+    async def afk(self, ctx, txt: str = None):
+        """Set your Discord status for when you aren't online. Ex: [p]afk idle"""
+        with open('settings/optional_config.json', 'r+') as fp:
+            opt = json.load(fp)
+            usage = parse_prefix(self.bot, 'Options: ``idle``, ``dnd``, ``offline``. When the status is set, the bot will set you to this by default when you are not on Discord. Ex: [c]afk idle')
+            if txt:
+                if txt.strip() == 'idle':
+                    opt['default_status'] = 'idle'
+                    self.bot.default_status = 'idle'
+                elif txt.strip() == 'dnd' or txt.strip() == 'do not disturb':
+                    opt['default_status'] = 'dnd'
+                    self.bot.default_status = 'dnd'
+                elif txt.strip() == 'offline' or 'invis' in txt.strip() or txt.strip() == 'incognito':
+                    opt['default_status'] = 'invisible'
+                    self.bot.default_status = 'invisible'
+                else:
+                    return await ctx.send(self.bot.bot_prefix + 'Invalid status.\n' + usage)
+            else:
+                if isinstance(ctx.message.author, discord.Member):
+                    info = 'Current status returned by Discord: `{}` | Current Default status: `{}`\n'.format(str(ctx.message.author.status).title(), opt['default_status'].title())
+                else:
+                    info = 'Current Default status: `{}`\n'.format(opt['default_status'].title())
+                return await ctx.send(self.bot.bot_prefix + info + usage)
+            fp.seek(0)
+            fp.truncate()
+            json.dump(opt, fp, indent=4)
+            await ctx.send(self.bot.bot_prefix + 'Set default afk status. You will now appear as ``{}`` when not on Discord.'.format(
+                                            opt['default_status']))
 
-    @commands.command()
-    async def spaceify(self, ctx, *, text):
-        await asyncio.sleep(0.1)
-        await ctx.message.edit(text.replace('', ' '))
 
 def setup(bot):
     bot.add_cog(Misc(bot))
